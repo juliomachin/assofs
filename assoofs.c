@@ -386,7 +386,7 @@ static int assoofs_create(struct inode *dir, struct dentry *dentry, umode_t mode
 	dir_contents_datablock = (struct assoofs_dir_record_entry *)bh->b_data; 
 	dir_contents_datablock += parent_dir_inode->dir_children_count;
     	dir_contents_datablock->inode_no = i_info->inode_no;	
-		
+
 	strcpy(dir_contents_datablock->filename, dentry->d_name.name);
 
 	mark_buffer_dirty(bh);
@@ -398,14 +398,18 @@ static int assoofs_create(struct inode *dir, struct dentry *dentry, umode_t mode
 	i = assoofs_inode_save(sb, parent_dir_inode);
 
 	if(i){
+		mutex_unlock(&assoofs_inodes_mgmt_lock);
+		mutex_unlock(&assoofs_directory_children_update_lock);
 		printk(KERN_INFO "[assoofs_create] > ERROR: [%d]", i);
 		return i;
-	} else {
-		inode_init_owner(inode, dir, mode); //
-		d_add(dentry, inode);	//
-		printk(KERN_INFO "[assoofs_create] > Call finished. FILE/DIR %s stored and saved.", dentry -> d_name.name);
-		return 0;
-	}
+	} 
+	inode_init_owner(inode, dir, mode); //
+	d_add(dentry, inode);	//
+	printk(KERN_INFO "[assoofs_create] > Call finished. FILE/DIR %s stored and saved.", dentry -> d_name.name);
+
+	mutex_unlock(&assoofs_inodes_mgmt_lock);
+	mutex_unlock(&assoofs_directory_children_update_lock);
+	return 0;
 }
 
 
@@ -705,7 +709,7 @@ ssize_t assoofs_write ( struct file *filp , const char __user *buf , size_t len 
 		printk("Failed to acquire mutex lock\n");
 		return -EINTR;
 	}
-	i_inode->file_size = *ppos;
+	//i_inode->file_size = *ppos;
 	ret_value = assoofs_inode_save(sb, i_inode);
 	if (ret_value) {
 		len = ret_value;
@@ -716,8 +720,6 @@ ssize_t assoofs_write ( struct file *filp , const char __user *buf , size_t len 
 
 
 }
-	
-
 
 
 module_init(assoofs_init);
