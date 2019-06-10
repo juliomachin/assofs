@@ -14,35 +14,40 @@ MODULE_AUTHOR("Julio Machin Ruiz");
 /*****************
 	FUNCIONES
 *****************/
-struct assoofs_inode_info * assoofs_get_inode_info(struct super_block *sb, uint64_t ino);
 
-static struct inode *assoofs_get_inode(struct super_block *sb, uint64_t ino);
+static int __init assoofs_init(void);
+static void __exit assoofs_exit(void);
 
 static struct dentry *assoofs_mount(struct file_system_type *fs_type, int flags, const char *dev_name, void *data);
 
-static int assoofs_create_fs_object(struct inode *dir, struct dentry *dentry, umode_t mode);
+int assoofs_fill_super(struct super_block *sb, void *data, int silent);
+struct assoofs_inode_info * assoofs_get_inode_info(struct super_block *sb, uint64_t ino);
 
-void assoofs_sb_sync(struct super_block *sb);
-
-void assoofs_inode_add_info(struct super_block *sb, struct assoofs_inode_info  *inode);
-
-int assoofs_sb_get_a_freeblock(struct super_block *sb, uint64_t * block);
-
-int assoofs_inode_save(struct super_block *sb, struct assoofs_inode_info *i_inode);
-
-ssize_t assoofs_read ( struct file *filp , char __user *buf , size_t len , loff_t * ppos );
-
-ssize_t assoofs_write ( struct file *filp , const char __user *buf , size_t len , loff_t * ppos );
-
-static int assoofs_iterate ( struct file *filp , struct dir_context * ctx );
 
 struct dentry * assoofs_lookup ( struct inode * parent_inode , struct dentry * child_dentry , unsigned int flags );
+static struct inode *assoofs_get_inode(struct super_block *sb, uint64_t ino);
 
-static int assoofs_create ( struct inode *dir , struct dentry * dentry , umode_t mode , bool excl );
+
+
+static int assoofs_create(struct inode *dir, struct dentry *dentry, umode_t mode, bool excl);
+int assoofs_sb_get_a_freeblock(struct super_block *sb, uint64_t * block);
+void assoofs_sb_sync(struct super_block *sb);
+void assoofs_inode_add_info(struct super_block *sb, struct assoofs_inode_info  *inode);
+int assoofs_inode_save(struct super_block *sb, struct assoofs_inode_info *i_inode);
 
 static int assoofs_mkdir ( struct inode *dir , struct dentry * dentry , umode_t mode );
 
-int assoofs_fill_super(struct super_block *sb, void *data, int silent);
+
+
+static int assoofs_iterate ( struct file *filp , struct dir_context * ctx );
+ssize_t assoofs_read ( struct file *filp , char __user *buf , size_t len , loff_t * ppos );
+ssize_t assoofs_write ( struct file *filp , const char __user *buf , size_t len , loff_t * ppos );
+
+
+
+
+
+
 
 
 /*************
@@ -314,20 +319,22 @@ static struct inode *assoofs_get_inode(struct super_block *sb, uint64_t ino){
 /***********************
 		CREATE
 ************************/
-static int assoofs_create_fs_object(struct inode *dir, struct dentry *dentry, umode_t mode)
+static int assoofs_create(struct inode *dir, struct dentry *dentry, umode_t mode, bool excl)
 {
-	struct inode *inode;
-	struct assoofs_inode_info *i_info;
-	struct super_block *sb;
-	struct assoofs_inode_info *parent_dir_inode;
 	struct buffer_head *bh;
-	struct assoofs_dir_record_entry *dir_contents_datablock;
-	struct assoofs_super_block_info *sb_disk;
+	struct super_block *sb;
+	struct inode *inode;
 	uint64_t count;
-	int ret;
+	struct assoofs_inode_info *i_info;
+	
+	struct assoofs_inode_info *parent_dir_inode;
+	struct assoofs_dir_record_entry *dir_contents_datablock;
+	
+	struct assoofs_super_block_info *sb_disk;
+
 	int i;
 
-	//MUTEX
+
 
 	if (mutex_lock_interruptible(&assoofs_directory_children_update_lock)) {
 		printk("Failed to acquire mutex lock\n");
@@ -369,50 +376,46 @@ static int assoofs_create_fs_object(struct inode *dir, struct dentry *dentry, um
 		inode->i_fop = &assoofs_file_operations;
 	}
 
-	//Conseguir un nuevo bloque
-	for (i = 4; i < ASSOOFS_MAX_FILESYSTEM_OBJECTS_SUPPORTED; i++) {
-		if (sb_disk->free_blocks & (1 << i)) {
-			break;
-		}
+	i = assoofs_sb_get_a_freeblock(sb, &i_info->data_block_number);
+
+		//Control de errores
+	if (i < 0) {
+		printk(KERN_ERR "[assoofs_create] > Full block.");
+		return i;
 	}
-	i_info->data_block_number = i;
-	sb_disk->free_blocks &= ~(1 << i);
+		
+		// Guardar información persistente del nuevo inodo en disco
+	assoofs_inode_add_info(sb, i_info);
 
-	assoofs_sb_sync(sb);
-	assoofs_inode_save(sb, i_info);
-
-	//inodo padre
-	parent_dir_inode = dir->i_private;
+	// 2. Modificar contenido del directorio padre añadiendo una nueva entrada para el directorio o archivo
+		// El nombre lo sacaremos del segundo parámetro
+	parent_dir_inode = (struct assoofs_inode_info *) dir->i_private;
 	bh = sb_bread(sb, parent_dir_inode->data_block_number);
 
-	dir_contents_datablock = (struct assoofs_dir_record_entry *)bh->b_data;
+	dir_contents_datablock = (struct assoofs_dir_record_entry *)bh->b_data; // Bloque con contenido del padre
 	dir_contents_datablock += parent_dir_inode->dir_children_count;
-	dir_contents_datablock->inode_no = i_info->inode_no;
+    	dir_contents_datablock->inode_no = i_info->inode_no;	// inode_info es la informacion persistente del inodo creado en el paso 2
+
+		// Copiamos el nombre del archivo
 	strcpy(dir_contents_datablock->filename, dentry->d_name.name);
 
-	assoofs_inode_save(sb, parent_dir_inode);
 	mark_buffer_dirty(bh);
 	sync_dirty_buffer(bh);
 	brelse(bh);
 
-	if (mutex_lock_interruptible(&assoofs_inodes_mgmt_lock)) {
-		mutex_unlock(&assoofs_directory_children_update_lock);
-		printk("Failed to acquire mutex lock\n");
-		return -EINTR;
+	// 3. Actualizar información persistente del inodo padre (hay un archivo más)
+	parent_dir_inode->dir_children_count++;	// Incrementamos los hijos
+	i = assoofs_inode_save(sb, parent_dir_inode);
+
+	if(i){
+		printk(KERN_INFO "[assoofs_create] > ERROR: [%d]", i);
+		return i;
+	} else {
+		inode_init_owner(inode, dir, mode); //
+		d_add(dentry, inode);	//
+		printk(KERN_INFO "[assoofs_create] > Call finished. FILE/DIR %s stored and saved.", dentry -> d_name.name);
+		return 0;
 	}
-
-
-	parent_dir_inode->dir_children_count++;
-	ret = assoofs_inode_save(sb, parent_dir_inode);
-
-
-	mutex_unlock(&assoofs_inodes_mgmt_lock);
-	mutex_unlock(&assoofs_directory_children_update_lock);
-
-	inode_init_owner(inode, dir, mode);
-	d_add(dentry, inode);
-
-	return 0;
 }
 
 
@@ -579,7 +582,7 @@ struct assoofs_inode_info *assoofs_search_inode_info(struct super_block *sb, str
 *************************/
 static int assoofs_mkdir ( struct inode *dir , struct dentry * dentry , umode_t mode ){
 	printk(KERN_INFO "CREATE MKDIR");
-	return assoofs_create_fs_object(dir, dentry, S_IFDIR | mode);
+	return assoofs_create(dir, dentry, S_IFDIR | mode, NULL);
 }
 
 /************************
@@ -723,11 +726,7 @@ ssize_t assoofs_write ( struct file *filp , const char __user *buf , size_t len 
 
 
 }
-
-static int assoofs_create ( struct inode *dir , struct dentry * dentry , umode_t mode , bool excl ){
-	printk(KERN_INFO "CREATE");
-	return assoofs_create_fs_object(dir, dentry, mode);
-}	
+	
 
 
 
