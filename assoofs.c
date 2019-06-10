@@ -44,12 +44,6 @@ ssize_t assoofs_read ( struct file *filp , char __user *buf , size_t len , loff_
 ssize_t assoofs_write ( struct file *filp , const char __user *buf , size_t len , loff_t * ppos );
 
 
-
-
-
-
-
-
 /*************
 	CACHE
 **************/
@@ -384,26 +378,22 @@ static int assoofs_create(struct inode *dir, struct dentry *dentry, umode_t mode
 		return i;
 	}
 		
-		// Guardar información persistente del nuevo inodo en disco
 	assoofs_inode_add_info(sb, i_info);
 
-	// 2. Modificar contenido del directorio padre añadiendo una nueva entrada para el directorio o archivo
-		// El nombre lo sacaremos del segundo parámetro
 	parent_dir_inode = (struct assoofs_inode_info *) dir->i_private;
 	bh = sb_bread(sb, parent_dir_inode->data_block_number);
 
-	dir_contents_datablock = (struct assoofs_dir_record_entry *)bh->b_data; // Bloque con contenido del padre
+	dir_contents_datablock = (struct assoofs_dir_record_entry *)bh->b_data; 
 	dir_contents_datablock += parent_dir_inode->dir_children_count;
-    	dir_contents_datablock->inode_no = i_info->inode_no;	// inode_info es la informacion persistente del inodo creado en el paso 2
-
-		// Copiamos el nombre del archivo
+    	dir_contents_datablock->inode_no = i_info->inode_no;	
+		
 	strcpy(dir_contents_datablock->filename, dentry->d_name.name);
 
 	mark_buffer_dirty(bh);
 	sync_dirty_buffer(bh);
 	brelse(bh);
 
-	// 3. Actualizar información persistente del inodo padre (hay un archivo más)
+
 	parent_dir_inode->dir_children_count++;	// Incrementamos los hijos
 	i = assoofs_inode_save(sb, parent_dir_inode);
 
